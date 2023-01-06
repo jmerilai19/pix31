@@ -1,764 +1,715 @@
+import math
 import pyglet
 import pyglet.gl as gl
-import math
-import export
-import palette
 
-# Zooming constants
-ZOOM_IN_FACTOR = 2
-ZOOM_OUT_FACTOR = 1/ZOOM_IN_FACTOR
+import algorithms as algo
+import constants as const
+import export as exp
+import palette_manager as palet
 
-# Window start size
-START_W = 960
-START_H = 540
+class Artist():
+    def __init__(self) -> None:
+        self.primaryColor = (0, 0, 0, 255)
+        self.secondaryColor = (255, 0, 0, 255)
+        self.mode = "pencil"
+        self.palette = palet.read_hex_to_rgb("./palette_default.hex")
 
-project = {
-    "name": "Untitled"                              # Name of the project
-}
-
-canvas = {
-    "origin": [0, 0],                               # Origin point of canvas in world coordinates
-    "beginning_pos": (0, 0),                        # Beginning position for potential line draw
-    "mouse_pos": (0, 0),                            # Mouse position on canvas
-    "width": 64,                                    # Canvas width in pixels
-    "height": 64,                                   # canvas height in pixels
-    "background_color": (245, 245, 245, 255),       # Canvas background color
-    "matrix": [],                                   # Matrix for color values of each pixel
-    "batch_matrix": []                              # Matrix for drawable pixels
-}
-
-options = {
-    "started": False,                               # Has the app started
-    "mouse_pos": [0, 0],                            # Mouse position on window
-    "primary_color":  (0, 0, 0, 255),               # Primary color (left)
-    "secondary_color": (255, 255, 255, 255),        # Secondary color (right)
-    "palette_colors": [],                           # Color values of the toolbar palette
-    "draw_mode": 0,                                 # Draw mode number
-    "grid_on": False,                               # Is grid on?
-    "font": ["Arial", 11, False],                   # Default font
-    "saved": False                                  # Has the image been saved?
-}
-
-class Window(pyglet.window.Window):
-    def __init__(self, width, height, *args, **kwargs):
-        super().__init__(width, height, *args, **kwargs)
-
-        # Set app icon
-        self.icon = pyglet.image.load("favicon.ico")
-        self.set_icon(self.icon)
-
-        # Set canvas origin point
-        canvas["origin"][0] = self.width/2 - canvas["width"]/2
-        canvas["origin"][1] = self.height/2 - canvas["width"]/2
-
-        # Create blank canvas
-        self.canvas_bg_image = pyglet.image.SolidColorImagePattern(
-                    canvas["background_color"]).create_image(
-                    canvas["width"],
-                    canvas["height"])
-        self.canvas_bg_sprite = pyglet.sprite.Sprite(self.canvas_bg_image, x=canvas["origin"][0],
-                                                    y=canvas["origin"][1])
-
-        self.pixel_cursor_image = pyglet.image.SolidColorImagePattern(
-                    (0,0,0,96)).create_image(
-                    1,
-                    1)
-        self.pixel_cursor_sprite = None
-
-        # Initialize camera values
-        self.left   = 0
-        self.right  = width
-        self.bottom = 0
-        self.top    = height
-        self.zoom_level = 1
-        self.zoomed_width  = width
-        self.zoomed_height = height
-
-        # Initialize window values
-        self.width  = width
+class Canvas():
+    def __init__(self, width, height) -> None:
+        self.width = width
         self.height = height
-        self.last_width = 1
-        self.last_height = 1
-
-        # Initialize other values
-        canvas["beginning_pos"] = None
-        self.mouse_on_canvas = False
-
-        # Create palette for toolbar
-        self.create_palette()
-
-    def on_resize(self, width, height):
-        # Set window values
-        self.width  = width
-        self.height = height
-
-        # Translate window content to match window resize
-        if options["started"] == True:
-            fx = self.width/self.last_width
-            fy = self.height/self.last_height
-
-            mouse_x = 0.5
-            mouse_y = 0.5
-
-            mouse_x_in_world = self.left   + mouse_x*self.zoomed_width
-            mouse_y_in_world = self.bottom + mouse_y*self.zoomed_height
-
-            self.zoomed_width  *= fx
-            self.zoomed_height *= fy
-
-            self.left   = mouse_x_in_world - mouse_x*self.zoomed_width
-            self.right  = mouse_x_in_world + (1 - mouse_x)*self.zoomed_width
-            self.bottom = mouse_y_in_world - mouse_y*self.zoomed_height
-            self.top    = mouse_y_in_world + (1 - mouse_y)*self.zoomed_height
-        else:
-            options["started"] = True
-
-        # Store last window values
-        self.last_width = self.width
-        self.last_height = self.height
-
-        self.update_top_toolbar()
-
-    def on_mouse_press(self, x, y, button, modifiers):
-        # Position of the mouse relative to window
-        mouse_x = x/self.width
-        mouse_y = y/self.height
-
-        # Mouse position in world coordinates
-        mouse_x_in_world = self.left   + mouse_x*self.zoomed_width
-        mouse_y_in_world = self.bottom + mouse_y*self.zoomed_height
-
-        # If mouse is on canvas
-        mouse_on_canvas = False
-
-        x_coord = math.floor(mouse_x_in_world - START_W/2 + canvas["width"]/2)
-        y_coord = canvas["height"] - 1 - math.floor(mouse_y_in_world - START_H/2 + canvas["height"]/2)
-
-        if START_W/2 - canvas["width"]/2 < mouse_x_in_world < START_W/2 + canvas["width"]/2 \
-        and START_H/2 - canvas["height"]/2 < mouse_y_in_world < START_H/2 + canvas["height"]/2:
-            mouse_on_canvas = True
-
-        # Left mouse button
-        if button == pyglet.window.mouse.LEFT:
-            # Top toolbar
-            if y > self.height - 80:
-                found = False
-                for box in self.palette_colors:
-                    if box.x < x < box.x + 16 and self.height - 80 + box.y < y < self.height - 80 + box.y + 16:
-                        options["primary_color"] = box.color
-                        self.update_top_toolbar()
-                        found = True
-                        break
-                if found == False:
-                    for box in self.mode_buttons:
-                        if box.x < x < box.x + 24 and self.height - 80 + box.y < y < self.height - 80 + box.y + 24:
-                            options["draw_mode"] = box.mode
-                            self.update_top_toolbar()
-                            found = True
-                            break
-            # Main area
-            elif y > 20:
-                # Pencil tool
-                if options["draw_mode"] == 0:
-                    canvas["beginning_pos"] = (x_coord, y_coord)
-                    if mouse_on_canvas:
-                        add_pixel((x_coord, y_coord), options["primary_color"])
-                # Paint bucket tool
-                elif options["draw_mode"] == 1:
-                    if mouse_on_canvas:
-                        flood_fill((x_coord, y_coord), options["primary_color"])
-                # Eraser tool
-                elif options["draw_mode"] == 2:
-                    canvas["beginning_pos"] = (x_coord, y_coord)
-                    if mouse_on_canvas:
-                        erase_pixel((x_coord, y_coord))
-                # Color picker
-                elif options["draw_mode"] == 3:
-                    color_pick((x_coord, y_coord), 0)
-                    self.update_top_toolbar()
-                # Line tool
-                elif options["draw_mode"] == 4:
-                    canvas["beginning_pos"] = (x_coord, y_coord)
-                    if mouse_on_canvas:
-                        add_pixel((x_coord, y_coord), options["primary_color"])
-        # Right mouse button
-        elif button == pyglet.window.mouse.RIGHT:
-            # Top toolbar
-            if y > self.height - 80:
-                for box in self.palette_colors:
-                    if box.x < x < box.x + 16 and self.height - 80 + box.y < y < self.height - 80 + box.y + 16:
-                        options["secondary_color"] = box.color
-                        self.update_top_toolbar()
-                        break
-            # Main area
-            elif y > 20:
-                # Pencil tool
-                if options["draw_mode"] == 0:
-                    canvas["beginning_pos"] = (x_coord, y_coord)
-                    if mouse_on_canvas:
-                        add_pixel((x_coord, y_coord), options["secondary_color"])
-                # Paint bucket tool
-                elif options["draw_mode"] == 1:
-                    if mouse_on_canvas:
-                        flood_fill((x_coord, y_coord), options["secondary_color"])
-                # Color picker
-                elif options["draw_mode"] == 3:
-                    color_pick((x_coord, y_coord), 1)
-                    self.update_top_toolbar()
-
-    def on_mouse_release(self, x, y, button, modifiers):
-        if button == pyglet.window.mouse.LEFT or button == pyglet.window.mouse.RIGHT:
-            canvas["beginning_pos"] = None
-
-    def on_mouse_drag(self, x, y, dx, dy, button, modifiers):
-        coordinates_on_canvas(x, y, self)
-
-        # Position of the mouse relative to window
-        mouse_x = x/self.width
-        mouse_y = y/self.height
-
-        # Mouse position in world coordinates
-        mouse_x_in_world = self.left   + mouse_x*self.zoomed_width
-        mouse_y_in_world = self.bottom + mouse_y*self.zoomed_height
-
-        x_coord = math.floor(mouse_x_in_world - START_W/2 + canvas["width"]/2)
-        y_coord = canvas["height"] - 1 - math.floor(mouse_y_in_world - START_H/2 + canvas["height"]/2)
-
-        # Middle mouse button
-        if button == pyglet.window.mouse.MIDDLE:
-            if not y > self.height - 80 and not y < 20:
-                # Move camera
-                if self.left - dx*self.zoom_level < START_W/2 and self.right - dx*self.zoom_level > START_W/2:
-                    self.left   -= dx*self.zoom_level
-                    self.right  -= dx*self.zoom_level
-
-                if self.top - dy*self.zoom_level > START_H/2 + 80*self.zoom_level and \
-                self.bottom - dy*self.zoom_level < START_H/2 - 20*self.zoom_level:
-                    self.bottom -= dy*self.zoom_level
-                    self.top    -= dy*self.zoom_level
-        # Left mouse button
-        elif button == pyglet.window.mouse.LEFT:
-            if not canvas["beginning_pos"] == None:
-                # Pencil tool
-                if options["draw_mode"] == 0:
-                    if abs(x_coord - canvas["beginning_pos"][0]) > 1 or abs(y_coord - canvas["beginning_pos"][1]) > 1:  # is the distance between positions > 1
-                        draw_line(canvas["beginning_pos"], (x_coord, y_coord), 0, options["primary_color"])     # draw a line between positions
-                    else:
-                        add_pixel((x_coord, y_coord), options["primary_color"])
-                    canvas["beginning_pos"] = (x_coord, y_coord)
-                elif options["draw_mode"] == 2:
-                    if abs(x_coord - canvas["beginning_pos"][0]) > 1 or abs(y_coord - canvas["beginning_pos"][1]) > 1:  # is the distance between positions > 1
-                        draw_line(canvas["beginning_pos"], (x_coord, y_coord), 1)     # draw a line between positions
-                    else:
-                        erase_pixel((x_coord, y_coord))
-                    canvas["beginning_pos"] = (x_coord, y_coord)
-        # Right mouse button
-        elif button == pyglet.window.mouse.RIGHT:
-            if not canvas["beginning_pos"] == None:
-                if options["draw_mode"] == 0:
-                    if abs(x_coord - canvas["beginning_pos"][0]) > 1 or abs(y_coord - canvas["beginning_pos"][1]) > 1:  # is the distance between positions > 1
-                        draw_line(canvas["beginning_pos"], (x_coord, y_coord), 0, options["secondary_color"])     # draw a line between positions
-                    else:
-                        add_pixel((x_coord, y_coord), options["secondary_color"])
-                    canvas["beginning_pos"] = (x_coord, y_coord)
-
-    def on_mouse_scroll(self, x, y, dx, dy):
-        # Get scale factor
-        f = 1
-        if dy < 0:
-            f = ZOOM_IN_FACTOR
-        elif dy > 0:
-            f = ZOOM_OUT_FACTOR
-        else:
-            f = 1
-
-        # If mouse is in main area
-        if not y > self.height - 80 and not y < 20:
-            # If zoom_level is in the proper range
-            if 0.03125 < self.zoom_level*f < 2:
-                # Position of the mouse relative to window
-                mouse_x = x/self.width
-                mouse_y = y/self.height
-
-                # Mouse position in world coordinates
-                mouse_x_in_world = self.left   + mouse_x*self.zoomed_width
-                mouse_y_in_world = self.bottom + mouse_y*self.zoomed_height
-
-                if dy > 0:
-                    if  not (START_W/2 - canvas["width"]/2 < mouse_x_in_world < START_W/2 + canvas["width"]/2 \
-                    and START_H/2 - canvas["height"]/2 < mouse_y_in_world < START_H/2 + canvas["height"]/2):
-                        mouse_x_in_world = START_W/2
-                        mouse_y_in_world = START_H/2
-                        mouse_x = (mouse_x_in_world - self.left)/self.zoomed_width
-                        mouse_y = (mouse_y_in_world - self.bottom)/self.zoomed_height
-                elif dy < 0:
-                    if  not (START_W/2 - canvas["width"]/2 < mouse_x_in_world < START_W/2 + canvas["width"]/2 \
-                    and START_H/2 - canvas["height"]/2 < mouse_y_in_world < START_H/2 + canvas["height"]/2):
-                        mouse_x_in_world = START_W/2
-                        mouse_y_in_world = START_H/2
-                        mouse_x = (mouse_x_in_world - self.left)/self.zoomed_width
-                        mouse_y = (mouse_y_in_world - self.bottom)/self.zoomed_height
-
-                self.zoom_level *= f
-                self.zoomed_width  *= f
-                self.zoomed_height *= f
-
-                self.left   = mouse_x_in_world - mouse_x*self.zoomed_width
-                self.right  = mouse_x_in_world + (1 - mouse_x)*self.zoomed_width
-                self.bottom = mouse_y_in_world - mouse_y*self.zoomed_height
-                self.top    = mouse_y_in_world + (1 - mouse_y)*self.zoomed_height
-
-    def on_key_press(self, symbol, modifiers):
-        # Debug functionalities
-        if symbol == pyglet.window.key._0:
-            options["grid_on"] = not options["grid_on"]
-        elif symbol == pyglet.window.key._1:
-            options["draw_mode"] = 0
-        elif symbol == pyglet.window.key._2:
-            options["draw_mode"] = 1
-        elif symbol == pyglet.window.key._3:
-            options["draw_mode"] = 2
-        elif symbol == pyglet.window.key._4:
-            options["draw_mode"] = 3
-        elif symbol == pyglet.window.key.Z:
-            if pyglet.window.key.MOD_CTRL:
-                if pyglet.window.key.MOD_SHIFT and modifiers == 3:
-                    print("CTRL-SHIFT-Z", modifiers) #TODO REDO
-                elif modifiers == 2:
-                    print("CTRL-Z", modifiers) #TODO UNDO
-        elif symbol == pyglet.window.key.S:
-            if pyglet.window.key.MOD_CTRL and modifiers == 2:
-                print("CTRL-S")
-                export.export_image(canvas["matrix"], canvas["width"], canvas["height"])
-
-    def on_draw(self):
-        self.update_bottom_toolbar()
-
-        # Main area:
-
-        # Window background color
-        gl.glClearColor(33/255, 33/255, 33/255, 1)
-
-        # Set viewport
-        gl.glViewport(0, 0, self.width, self.height)
-
-        # Initialize Projection matrix
-        gl.glMatrixMode(gl.GL_PROJECTION)
-        gl.glLoadIdentity()
-
-        # Set orthographic projection matrix
-        gl.gluOrtho2D(self.left, self.right, self.bottom, self.top)
-
-        # Initialize Modelview matrix
-        gl.glMatrixMode(gl.GL_MODELVIEW)
-        gl.glLoadIdentity()
-
-        # Clear window with ClearColor
-        gl.glClear(gl.GL_COLOR_BUFFER_BIT)
-
-        # Draw blank canvas
-        self.canvas_bg_sprite.draw()
-
-        # Draw pixels
-        if pixel_batch:
-            pixel_batch.draw()
-
-        # ???
-        if holder_patch:
-            holder_patch.draw()
-
-        # Draw pixel cursor
-        if not self.pixel_cursor_sprite == None:
-            self.pixel_cursor_sprite.draw()
-
-        # Draw grid lines
-        if options["grid_on"] and self.zoom_level < 0.5:
-            draw_grid(self.width, self.height)
-
-        # Bottom toolbar:
-
-        # Set viewport
-        gl.glViewport(0, 0, self.width, 20)
-
-        # Initialize Projection matrix
-        gl.glMatrixMode(gl.GL_PROJECTION)
-        gl.glLoadIdentity()
-
-        # Set orthographic projection matrix
-        gl.gluOrtho2D(0, self.width, 0,20)
-
-        # Initialize Modelview matrix
-        gl.glMatrixMode(gl.GL_MODELVIEW)
-        gl.glLoadIdentity()
-
-        # Draw bottom toolbar
-        self.bottom_toolbar_bg_sprite.draw()
-        self.size_label.draw()
-        self.zoom_label.draw()
-        if self.mouse_on_canvas:
-            self.position_label.draw()
-
-        # Top toolbar:
-
-        # Set viewport
-        gl.glViewport(0, self.height - 80, self.width, 80)
-
-        # Initialize Projection matrix
-        gl.glMatrixMode(gl.GL_PROJECTION)
-        gl.glLoadIdentity()
-
-        # Set orthographic projection matrix
-        gl.gluOrtho2D(0, self.width, 0, 80)
-
-        # Initialize Modelview matrix
-        gl.glMatrixMode(gl.GL_MODELVIEW)
-        gl.glLoadIdentity()
-
-        # Draw background for top toolbar
-        self.top_toolbar_bg_sprite.draw()
-
-        # Draw top toolbar palette 
-        top_toolbar_batch.draw()
-
-        # Draw color selection displays
-        self.palette_colorleft_sprite.draw()
-        self.palette_colorright_sprite.draw()
-        self.colorleft_label.draw()
-        self.colorright_label.draw()
-
-    def run(self):
-        # Start the window
-        pyglet.app.run()
-
-    def on_mouse_motion(self, x, y, dx, dy):
-        coordinates_on_canvas(x, y, self)
-
-    def update_bottom_toolbar(self):
-        # Background
-        self.bottom_toolbar_bg_image = pyglet.image.SolidColorImagePattern((50,50,50,255)).create_image(self.width, 20)
-        self.bottom_toolbar_bg_sprite = pyglet.sprite.Sprite(self.bottom_toolbar_bg_image, x=0, y=0)
-
-        # Canvas size label
-        self.size_label = pyglet.text.Label("{} x {} px".format(canvas["width"], canvas["height"]),
-                font_name=options["font"][0],
-                font_size=options["font"][1],
-                x=self.width-4, y=0,
-                anchor_x='right', anchor_y='bottom', bold=options["font"][2])
-
-        # Zoom percentage label
-        self.zoom_label = pyglet.text.Label("{}%".format(int(1/self.zoom_level*100)),
-            font_name=options["font"][0],
-            font_size=options["font"][1],
-            x=4, y=0,
-            anchor_x='left', anchor_y='bottom', bold=options["font"][2])
-
-        # Mouse coordinates label
-        self.position_label = pyglet.text.Label("({}, {})".format(canvas["mouse_pos"][0], canvas["mouse_pos"][1]),
-                font_name=options["font"][0],
-                font_size=options["font"][1],
-                x=self.width/2, y=0,
-                anchor_x='center', anchor_y='bottom', bold=options["font"][2])
-
-    def update_top_toolbar(self):
-        # Background
-        self.top_toolbar_bg_image = pyglet.image.SolidColorImagePattern((50,50,50,255)).create_image(self.width, 80)
-        self.top_toolbar_bg_sprite = pyglet.sprite.Sprite(self.top_toolbar_bg_image, x=0, y=0)
-
-        # Left color display
-        self.palette_colorleft_image = pyglet.image.SolidColorImagePattern(options["primary_color"]).create_image(24, 24)
-        self.palette_colorleft_sprite = pyglet.sprite.Sprite(self.palette_colorleft_image, x = 960 - 304, y = 22)
-
-        # Right color display
-        self.palette_colorright_image = pyglet.image.SolidColorImagePattern(options["secondary_color"]).create_image(24, 24)
-        self.palette_colorright_sprite = pyglet.sprite.Sprite(self.palette_colorright_image, x = 960 - 304 + 38, y = 22)
-
-        self.mode_buttons = []
-        cut = 4
-        for i in range(0, 8):
-            if i < cut:
-                self.mode_buttons.append(Mode_button(i, 1, i))
-            else:
-                self.mode_buttons.append(Mode_button(i-cut, 0, i))
-
-    def update_title(self):
-        s = ""
-        if options["saved"] == False:
-            s = "*"
-        self.caption = "{}{} - pix31".format(project["name"], s)
-        
-    def create_palette(self):
-        x, y = self.width - 304, 0
-        cut = 11                        # How many palette colors in one row
-
-        # Left color label
-        self.colorleft_label = pyglet.text.Label("Left:",
-                font_name=options["font"][0],
-                font_size=9,
-                x=x, y=y+48,
-                anchor_x='left', anchor_y='bottom', bold=options["font"][2], batch=top_toolbar_batch)
-
-        # Right color label
-        self.colorright_label = pyglet.text.Label("Right:",
-                font_name=options["font"][0],
-                font_size=9,
-                x=x+35, y=y+48,
-                anchor_x='left', anchor_y='bottom', bold=options["font"][2], batch=top_toolbar_batch)
-
-        # Initialize palette
-        self.palette_colors = []
-        for index in range(0, 33):
-            # First row
-            if index < cut:
-                xx = x + 76 + index*16 + index*4
-                yy = y + 52
-            else:
-                # Second row
-                if index < 2*cut:
-                    xx = x + 76 + (index-cut)*16 + (index-cut)*4
-                    yy = y + 32
-                # Third row
-                else:
-                    xx = x + 76 + (index-2*cut)*16 + (index-2*cut)*4
-                    yy = y + 12
-
-            self.palette_colors.append(Palette_button(xx, yy, options["palette_colors"][index]))
-
-class Palette_button():
-    def __init__(self, x, y, color):
+        self.origin = [0, 0]
+        self.backgroundColor = (255, 255, 255, 255)
+
+        self.pixelMatrix = []
+        self.pixelBatchMatrix = []
+        self.previewMatrix = []
+        self.previewBatchMatrix = []
+
+        self.mousePos = [0, 0]      # mouse coordinates on canvas
+        self.beginningPos = [0, 0]  # beginning coordinates of action
+        self.endPos = [0, 0]        # end coordinates of action
+
+        self.gridOn = False
+
+    def add_pixel(self, pos, color, matrix, batch):
+        if matrix == "pixel":
+            matrixPosY = len(self.pixelMatrix) - 1 - pos[1]
+
+            if 0 <= matrixPosY < const.CANVAS_SIZE_Y and 0 <= pos[0] < const.CANVAS_SIZE_X:
+                self.add_pixel_to_batch((pos[0], matrixPosY), color, matrix, batch)
+                self.pixelMatrix[matrixPosY][pos[0]] = color
+        elif matrix == "preview":
+            matrixPosY = len(self.previewMatrix) - 1 - pos[1]
+
+            if 0 <= matrixPosY < const.CANVAS_SIZE_Y and 0 <= pos[0] < const.CANVAS_SIZE_X:
+                self.add_pixel_to_batch((pos[0], matrixPosY), color, matrix, batch)
+                self.previewMatrix[matrixPosY][pos[0]] = color
+
+    def add_pixel_to_batch(self, pos, color, matrix, batch):
+        x = pos[0] + self.origin[0]                              # convert pixel position to canvas position
+        y = (self.height - pos[1]) + self.origin[1]
+
+        if matrix == "pixel":
+            if not self.pixelBatchMatrix[pos[1]][pos[0]] == None:                              
+                self.pixelBatchMatrix[pos[1]][pos[0]].delete()   # delete pixel from batch before replacing it                 
+            
+            self.pixelBatchMatrix[pos[1]][pos[0]] = batch.add(4, pyglet.gl.GL_QUADS, None,   # add a pixel to the batch
+                ('v2f', [x, 
+                        y - 1, 
+                        x + 1, 
+                        y - 1, 
+                        x + 1, 
+                        y, 
+                        x, 
+                        y]),
+                ('c4B', (color[0], color[1], color[2], color[3], 
+                        color[0], color[1], color[2], color[3], 
+                        color[0], color[1], color[2], color[3], 
+                        color[0], color[1], color[2], color[3])))
+        elif matrix == "preview":
+            #color = (0, 255, 0, 0) # debug color for testing batch transfer
+            if not self.previewBatchMatrix[pos[1]][pos[0]] == None:                              
+                self.previewBatchMatrix[pos[1]][pos[0]].delete()   # delete pixel from batch before replacing it                 
+            
+            self.previewBatchMatrix[pos[1]][pos[0]] = batch.add(4, pyglet.gl.GL_QUADS, None,   # add a pixel to the batch
+                ('v2f', [x, 
+                        y - 1, 
+                        x + 1, 
+                        y - 1, 
+                        x + 1, 
+                        y, 
+                        x, 
+                        y]),
+                ('c4B', (color[0], color[1], color[2], color[3], 
+                        color[0], color[1], color[2], color[3], 
+                        color[0], color[1], color[2], color[3], 
+                        color[0], color[1], color[2], color[3])))
+
+    def color_pick(self, pos, artist, button):
+        matrixPosY = len(self.pixelMatrix) - 1 - pos[1]
+        if not self.pixelMatrix[matrixPosY][pos[0]] == (-1, -1, -1, -1):
+            if button == 0:
+                artist.primaryColor = self.pixelMatrix[matrixPosY][pos[0]]
+            elif button == 1:
+                artist.secondaryColor = self.pixelMatrix[matrixPosY][pos[0]]
+
+    def delete_pixel(self, pos):
+        matrixPosY = len(self.pixelMatrix) - 1 - pos[1]
+
+        if 0 <= matrixPosY < const.CANVAS_SIZE_Y and 0 <= pos[0] < const.CANVAS_SIZE_X:
+            if not self.pixelBatchMatrix[matrixPosY][pos[0]] == None:                              
+                self.pixelBatchMatrix[matrixPosY][pos[0]].delete()
+                self.pixelBatchMatrix[matrixPosY][pos[0]] = None
+                self.pixelMatrix[matrixPosY][pos[0]] = (-1, -1, -1, -1)
+
+    def draw_ellipse(self, color, batch):
+        pixels = algo.ellipse(self.beginningPos, self.endPos)
+        for pixel in pixels:
+            self.add_pixel(pixel, color, "preview", batch)
+
+    def draw_point(self, color, batch):
+        self.add_pixel(self.mousePos, color, "preview", batch)
+
+    def draw_line(self, color, batch):
+        pixels = algo.bresenham_line(self.beginningPos, self.endPos)
+        for pixel in pixels:
+            self.add_pixel(pixel, color, "preview", batch)
+
+    def draw_rectangle(self, color, batch):
+        pixels = algo.rectangle(self.beginningPos, self.endPos)
+        for pixel in pixels:
+            self.add_pixel(pixel, color, "preview", batch)
+
+    def erase_point(self):
+        self.delete_pixel(self.mousePos)
+
+    def erase_line(self):
+        pixels = algo.bresenham_line(self.beginningPos, self.endPos)
+        for pixel in pixels:
+            self.delete_pixel(pixel)
+
+    def fill(self, color, batch):
+        pixels = algo.flood_fill(self.mousePos, self.pixelMatrix)
+        for pixel in pixels:
+            self.add_pixel(pixel, color, "pixel", batch)
+
+    def is_mouse_on_canvas(self, x, y):
+        wWd2, wHd2 = const.WINDOW_START_WIDTH/2, const.WINDOW_START_HEIGHT/2
+        if wWd2 - self.width/2 < x < wWd2 + self.width/2 and wHd2 - self.height/2 < y < wHd2 + self.height/2:
+            return True
+        return False
+
+    def update_background(self):
+        self.canvasBgImage = pyglet.image.SolidColorImagePattern(self.backgroundColor).create_image(self.width, self.height)
+
+        # remove gl interpolation for sharp canvas edges when zoomed
+        canvasBgTexture = self.canvasBgImage.get_texture()
+        gl.glBindTexture(gl.GL_TEXTURE_2D, canvasBgTexture.id)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
+
+        self.canvasBgSprite = pyglet.sprite.Sprite(self.canvasBgImage, x=self.origin[0], y=self.origin[1])
+
+        self.background = self.canvasBgSprite
+
+class ModeButton():
+    def __init__(self, x, y, baseBatch, batch, index = 0):
+        self.x = 14 + x * 28
+        self.y = 14 + y * 28
+        self.mode = ""
+        self.index = index
+        self.hover = False
+        self.color = (120, 120, 120, 255)
+
+        self.image = pyglet.image.SolidColorImagePattern(self.color).create_image(24, 24)
+        self.sprite = pyglet.sprite.Sprite(self.image, x=self.x, y=self.y, batch=baseBatch)
+
+        if self.index == 0:
+            self.mode = "pencil"
+            img = pyglet.image.load('./icons/pencil.png')
+            self.icon = pyglet.sprite.Sprite(img, x=self.x+4, y=self.y+4, batch=batch)
+        elif self.index == 1:
+            self.mode = "eraser"
+            img = pyglet.image.load('./icons/eraser.png')
+            self.icon = pyglet.sprite.Sprite(img, x=self.x+4, y=self.y+4, batch=batch)
+        elif self.index == 2:
+            self.mode = "dropper"
+            img = pyglet.image.load('./icons/dropper.png')
+            self.icon = pyglet.sprite.Sprite(img, x=self.x+4, y=self.y+4, batch=batch)
+        elif self.index == 3:
+            self.mode = "line"
+            img = pyglet.image.load('./icons/line.png')
+            self.icon = pyglet.sprite.Sprite(img, x=self.x+4, y=self.y+4, batch=batch)
+        elif self.index == 5:
+            self.mode = "rectangle"
+            img = pyglet.image.load('./icons/rect.png')
+            self.icon = pyglet.sprite.Sprite(img, x=self.x+4, y=self.y+4, batch=batch)
+        elif self.index == 6:
+            self.mode = "ellipse"
+            img = pyglet.image.load('./icons/ellipse.png')
+            self.icon = pyglet.sprite.Sprite(img, x=self.x+4, y=self.y+4, batch=batch)
+        elif self.index == 7:
+            self.mode = "fill"
+            img = pyglet.image.load('./icons/paint-bucket.png')
+            self.icon = pyglet.sprite.Sprite(img, x=self.x+4, y=self.y+4, batch=batch)
+
+class PaletteButton():
+    def __init__(self, x, y, color, batch):
         self.x = x
         self.y = y
         self.color = color
 
         self.image = pyglet.image.SolidColorImagePattern(self.color).create_image(16, 16)
-        self.sprite = pyglet.sprite.Sprite(self.image, x=x, y=y, batch=top_toolbar_batch)
+        self.sprite = pyglet.sprite.Sprite(self.image, x=x, y=y, batch=batch)
 
-    def draw(self):
-        self.sprite.draw()
+class Window(pyglet.window.Window):
+    def __init__(self, width, height, canvas, artist, *args, **kwargs):
+        super().__init__(width, height, *args, **kwargs)
+        self.width  = width
+        self.height = height
+        self.lastWidth  = width
+        self.lastHeight = height
 
-class Mode_button():
-    def __init__(self, x, y, mode = 0):
-        self.x = 14 + x * 28
-        self.y = 14 + y * 28
-        self.mode = mode
-        self.hover = False
-        self.default_color = (128, 128, 128, 255)
-        self.hover_color = (0, 0, 0, 255)
-        self.color = self.default_color
+        self.mousePos = [0, 0] # mouse coordinates on window
 
-        self.image = pyglet.image.SolidColorImagePattern(self.color).create_image(24, 24)
-        self.sprite = pyglet.sprite.Sprite(self.image, x=self.x, y=self.y, batch=top_toolbar_batch)
+        self.init_canvas(canvas)
 
-    def draw(self):
-        self.sprite.draw()
+        self.pixelBatch = pyglet.graphics.Batch()
+        self.previewBatch = pyglet.graphics.Batch()
+        self.topToolbarBatch = pyglet.graphics.Batch()
+        self.topToolbarIconBatch = pyglet.graphics.Batch()
 
-def color_pick(pos, button):
-    """
-    Sets the current color to the one that the clicked pixel is.
-    """
-    if not canvas["matrix"][pos[1]][pos[0]] == (0, 0, 0, 0):
-        if button == 0:
-            options["primary_color"] = canvas["matrix"][pos[1]][pos[0]]
-        elif button == 1:
-            options["secondary_color"] = canvas["matrix"][pos[1]][pos[0]]
+        self.modeButtons = []
+        self.init_modebuttons()
 
-def coordinates_on_canvas(x, y, self):
-    options["mouse_pos"] = (x, y)
-    # Position of the mouse relative to window
-    mouse_x = x/self.width
-    mouse_y = y/self.height
+        # pixel cursor
+        self.pixelCursorImage = pyglet.image.SolidColorImagePattern(
+                    (0,0,0,96)).create_image(
+                    1,
+                    1)
+        self.pixelCursorSprite = None
 
-    # Mouse position in world coordinates
-    mouse_x_in_world = self.left   + mouse_x*self.zoomed_width
-    mouse_y_in_world = self.bottom + mouse_y*self.zoomed_height
+        # shadow for pressing mode buttons
+        self.buttonShadowImage = pyglet.image.SolidColorImagePattern((0, 0, 0, 96)).create_image(24, 24)
+        self.buttonShadowSprite = pyglet.sprite.Sprite(self.buttonShadowImage, x=14, y=42)
 
-    x_coord = math.floor(mouse_x_in_world - START_W/2 + canvas["width"]/2)
-    y_coord = math.floor(mouse_y_in_world - START_H/2 + canvas["height"]/2)
+        # shadow for palette
+        self.paletteShadowImage = pyglet.image.SolidColorImagePattern((0, 0, 0, 96)).create_image(16, 16)
+        self.paletteShadowSprite = pyglet.sprite.Sprite(self.paletteShadowImage, x=0, y=100) 
 
-    if 0 <= x_coord < canvas["width"] and 0 <= y_coord < canvas["height"]:
-        canvas["mouse_pos"] = (x_coord, y_coord)
-        self.mouse_on_canvas = True
-        self.pixel_cursor_sprite = pyglet.sprite.Sprite(self.pixel_cursor_image, x=canvas["origin"][0]+x_coord,
-                                            y=canvas["origin"][1]+y_coord)
-    else:
-        self.mouse_on_canvas = False
-        self.pixel_cursor_sprite = None
+        for y in range(0, const.CANVAS_SIZE_Y):
+            self.canvas.pixelMatrix.append([])
+            self.canvas.pixelBatchMatrix.append([])
+            self.canvas.previewMatrix.append([])
+            self.canvas.previewBatchMatrix.append([])
+            for _ in range(0, const.CANVAS_SIZE_X):
+                self.canvas.pixelMatrix[y].append((-1, -1, -1, -1))
+                self.canvas.pixelBatchMatrix[y].append(None)
+                self.canvas.previewMatrix[y].append((-1, -1, -1, -1))
+                self.canvas.previewBatchMatrix[y].append(None)
 
-    return x_coord, y_coord
+        self.init_artist(artist)
+        self.init_camera()
+        self.init_toolbar_backgrounds()
+        self.init_palette()
+        self.set_color_display()
+        self.set_app_icon()
+        self.set_window_background_color()
+        self.update_zoom_percentage_label()
+        self.update_canvas_size_label()
 
-def add_pixel(pos, color = (0, 0, 0, 255)):
-    """
-    Adds the pixel to the canvas matrix and calls a function to add the pixel to the batch.
-    """
-    if pos[0] >= 0 and pos[0] < canvas["width"]:                # check if x position inside canvas
-        if pos[1] >= 0 and pos[1] < canvas["height"]:           # check if y position inside canvas
-            add_pixel_to_batch(pos, color)
-            canvas["matrix"][pos[1]][pos[0]] = color
+    def apply_preview(self):
+        for y in range(len(self.canvas.previewMatrix)):
+            for x in range(len(self.canvas.previewMatrix[y])):
+                if not self.canvas.previewMatrix[y][x] == (-1, -1, -1, -1):
+                    self.canvas.pixelMatrix[y][x] = self.canvas.previewMatrix[y][x]
+                    self.canvas.previewMatrix[y][x] = (-1, -1, -1, -1)
 
-def erase_pixel(pos):
-    """
-    Adds a transparent pixel to the canvas matrix and deletes the pixel from the batch.
-    """
-    if pos[0] >= 0 and pos[0] < canvas["width"]:                # check if x position inside canvas
-        if pos[1] >= 0 and pos[1] < canvas["height"]:           # check if y position inside canvas
-            canvas["matrix"][pos[1]][pos[0]] = (0, 0, 0, 0)
-            if not canvas["batch_matrix"][pos[1]][pos[0]] == None:
-                canvas["batch_matrix"][pos[1]][pos[0]].delete()
-                canvas["batch_matrix"][pos[1]][pos[0]] = None
+                    canvasY = len(self.canvas.previewMatrix[y]) - 1 - y
+                    self.canvas.add_pixel((x, canvasY), self.canvas.pixelMatrix[y][x], "pixel", self.pixelBatch)
+                    self.canvas.previewBatchMatrix[y][x].delete()
+                    self.canvas.previewBatchMatrix[y][x] = None
 
-def flood_fill(pos, color):
-    """
-    The "paint bucket tool". Fills an area with color.
-    """
-    pos_list = []                                       # a list for possible fillable positions
-    pos_list.append(pos)                                # add the clicked position to the list
-    area_color = canvas["matrix"][pos[1]][pos[0]]       # check what the color, that will be recolored, is
+    def clear_preview(self):
+        for y in range(len(self.canvas.previewMatrix)):
+            for x in range(len(self.canvas.previewMatrix[y])):
+                if not self.canvas.previewMatrix[y][x] == (-1, -1, -1, -1):
+                    self.canvas.previewMatrix[y][x] = (-1, -1, -1, -1)
 
-    if not area_color == color:
-        while pos_list:
-            pixel = pos_list.pop()                      # take one position out of the list
-            if canvas["matrix"][pixel[1]][pixel[0]] == area_color:
-                add_pixel(pixel, color)
+                    canvasY = len(self.canvas.previewMatrix[y]) - 1 - y
+                    self.canvas.previewBatchMatrix[y][x].delete()
+                    self.canvas.previewBatchMatrix[y][x] = None
 
-                # Check pixel from upside
-                xx = pixel[0]
-                yy = pixel[1] - 1
-                if yy >= 0 and xx >= 0 and yy < len(canvas["matrix"]) and xx < len(canvas["matrix"][pixel[1]]):
-                    if canvas["matrix"][yy][xx] == area_color :
-                        pos_list.append((xx, yy))
+    def convert_mouse_to_canvas_coordinates(self, x, y):
+        # position of the mouse relative to window (0.0-1.0)
+        mouseX = x/self.width
+        mouseY = y/self.height
 
-                # Check pixel from downside
-                yy = pixel[1] + 1
-                if yy >= 0 and xx >= 0 and yy < len(canvas["matrix"]) and xx < len(canvas["matrix"][pixel[1]]):
-                    if canvas["matrix"][yy][xx] == area_color:
-                        pos_list.append((xx, yy))
+        # mouse position in world coordinates
+        mouseWorldX = self.left   + mouseX*self.zoomedWidth
+        mouseWorldY = self.bottom + mouseY*self.zoomedHeight
 
-                # Check pixel from left side
-                xx = pixel[0] - 1
-                yy = pixel[1]
-                if yy >= 0 and xx >= 0 and yy < len(canvas["matrix"]) and xx < len(canvas["matrix"][pixel[1]]):
-                    if canvas["matrix"][yy][xx] == area_color:
-                        pos_list.append((xx, yy))
+        # mouse position on canvas
+        mouseCanvasX = math.floor(mouseWorldX - const.WINDOW_START_WIDTH/2 + self.canvas.width/2)
+        mouseCanvasY = math.floor(mouseWorldY - const.WINDOW_START_HEIGHT/2 + self.canvas.height/2)
 
-                # Check pixel from right side
-                xx = pixel[0] + 1
-                if yy >= 0 and xx >= 0 and yy < len(canvas["matrix"]) and xx < len(canvas["matrix"][pixel[1]]):
-                    if canvas["matrix"][yy][xx] == area_color:
-                        pos_list.append((xx, yy))
+        return mouseCanvasX, mouseCanvasY
 
-def add_pixel_to_batch(pos, color):
-    """
-    Adds a pixel to the batch in order to be drawn on screen
-    """
-    x = pos[0] + canvas["origin"][0]                            # convert pixel position to canvas position
-    y = (canvas["height"] - pos[1]) + canvas["origin"][1]       # convert pixel position to canvas position
-    if not canvas["batch_matrix"][pos[1]][pos[0]] == None:                              
-        canvas["batch_matrix"][pos[1]][pos[0]].delete()                                 # delete pixel from batch before replacing it                 
+    def draw_bottom_toolbar_background(self):
+        # set gl stuff
+        gl.glViewport(0, 0, self.width, 20)
+        gl.glMatrixMode(gl.GL_PROJECTION)
+        gl.glLoadIdentity()
+        gl.gluOrtho2D(0, self.width, 0, 20)
+        gl.glMatrixMode(gl.GL_MODELVIEW)
+        gl.glLoadIdentity()
 
-    canvas["batch_matrix"][pos[1]][pos[0]] = pixel_batch.add(4, pyglet.gl.GL_QUADS, None,     # add a pixel to the batch
-        ('v2f', [x, 
-                y - 1, 
-                x + 1, 
-                y - 1, 
-                x + 1, 
-                y, 
-                x, 
-                y]),
-        ('c4B', (color[0], color[1], color[2], color[3], 
-                color[0], color[1], color[2], color[3], 
-                color[0], color[1], color[2], color[3], 
-                color[0], color[1], color[2], color[3])))
+        # draw background
+        self.bottomToolbarBgSprite.draw()
 
-def draw_line(pos1, pos2, mode, color = (0, 0, 0, 0)):
-    """
-    Draws a line between two positions using Bresenham's line algorithm. 
-    Mode tells if the line is a line of pixels (0) or a line of pixels to erase (1).
-    """
-    x0, y0 = pos1[0], pos1[1]
-    x1, y1 = pos2[0], pos2[1]
-    dx = abs(x1 - x0)
-    dy = abs(y1 - y0)
-    x, y = x0, y0
-    sx = -1 if x0 > x1 else 1
-    sy = -1 if y0 > y1 else 1
-    if dx > dy:
-        err = dx / 2.0
-        while x != x1:
-            if mode == 0:
-                add_pixel((x, y), color)
-            elif mode == 1:
-                erase_pixel((x, y))
-            err -= dy
-            if err < 0:
-                y += sy
-                err += dx
-            x += sx
-    else:
-        err = dy / 2.0
-        while y != y1:
-            if mode == 0:
-                add_pixel((x, y), color)
-            elif mode == 1:
-                erase_pixel((x, y))
-            err -= dx
-            if err < 0:
-                x += sx
-                err += dy
-            y += sy
-    if mode == 0:
-        add_pixel((x, y), color)
-    elif mode == 1:
-        erase_pixel((x, y))
+    def draw_grid():
+        pass
 
-def setup():
-    """
-    Creates a matrix for the pixel grid and another for the batch items.
-    Sets up all needed settings for canvas.
-    """
-    for y in range(0, canvas["height"]):
-        canvas["matrix"].append([])
-        canvas["batch_matrix"].append([])
-        for _ in range(0, canvas["width"]):
-            canvas["matrix"][y].append((0, 0, 0, 0))
-            canvas["batch_matrix"][y].append(None)
+    def draw_main_area(self):
+        # set gl stuff
+        gl.glViewport(0, 0, self.width, self.height)
+        gl.glMatrixMode(gl.GL_PROJECTION)
+        gl.glLoadIdentity()
+        gl.gluOrtho2D(self.left, self.right, self.bottom, self.top)
+        gl.glMatrixMode(gl.GL_MODELVIEW)
+        gl.glLoadIdentity()
 
-    options["palette_colors"] = palette.read_hex_to_rgb("hexlist.hex")
+        # clear window with ClearColor
+        gl.glClear(gl.GL_COLOR_BUFFER_BIT)
 
-def draw_grid(width, height):
-    """
-    Draws grid lines on canvas
-    """
-    # Draw vertical lines
-    for x in range(0, canvas["width"] + 1):
-        w = width / 2 - canvas["width"] / 2 + x
-        pyglet.graphics.draw(4, pyglet.gl.GL_LINES, 
-            ("v2f", (0, 0, 0, 0, 
-                    w, 
-                    height / 2 + canvas["height"] / 2, 
-                    w, 
-                    height / 2 - canvas["height"] / 2)),
-            ('c3B', (128,128,128, 
-                    128,128,128,
-                    128,128,128, 
-                    128,128,128)))
+        # draw blank canvas
+        self.canvas.background.draw()
 
-    # Draw horizontal lines
-    for y in range(0, canvas["height"] + 1):
-        h = height / 2 - canvas["height"] / 2 + y
-        pyglet.graphics.draw(4, pyglet.gl.GL_LINES, 
-            ("v2f", (0, 0, 0, 0,
-            width / 2 - canvas["width"] / 2, 
-            h,
-            width / 2 + canvas["width"] / 2, 
-            h)),
-            ('c3B', (128,128,128, 
-                    128,128,128,
-                    128,128,128, 
-                    128,128,128)))
+        self.pixelBatch.draw()
+        self.previewBatch.draw()
+
+    def draw_top_toolbar_background(self):
+        # set gl stuff
+        gl.glViewport(0, self.height - 80, self.width, 80)
+        gl.glMatrixMode(gl.GL_PROJECTION)
+        gl.glLoadIdentity()
+        gl.gluOrtho2D(0, self.width, 0, 80)
+        gl.glMatrixMode(gl.GL_MODELVIEW)
+        gl.glLoadIdentity()
+
+        # draw background
+        self.topToolbarBgSprite.draw()
+
+    def draw_top_toolbar_icons(self):
+        self.topToolbarBatch.draw()
+        self.topToolbarIconBatch.draw()
+
+    def init_artist(self, artist):
+        self.artist = artist
+
+    def init_camera(self):
+        self.left   = 0
+        self.right  = self.width
+        self.bottom = 0
+        self.top    = self.height
+        self.zoomLevel = 1 # 1 = normal
+        self.zoomedWidth  = self.width
+        self.zoomedHeight = self.height
+
+    def init_canvas(self, canvas):
+        self.canvas = canvas
+
+        self.canvas.origin[0] = self.width/2 - self.canvas.width/2
+        self.canvas.origin[1] = self.height/2 - self.canvas.height/2
+
+        self.canvas.update_background()
+
+    def init_modebuttons(self):
+        cut = 5
+        for i in range(0, 10):
+            if i < cut:
+                self.modeButtons.append(ModeButton(i, 1, self.topToolbarBatch, self.topToolbarIconBatch, i))
+            else:
+                self.modeButtons.append(ModeButton(i-cut, 0, self.topToolbarBatch, self.topToolbarIconBatch, i))
+
+    def init_palette(self):
+        x, y = 180, 0
+        cut = 11   # how many palette colors in one row
+
+        # left color label
+        self.colorleft_label = pyglet.text.Label("Left:",
+                font_name=const.FONT_NAME,
+                font_size=9,
+                x=x, y=y+48,
+                anchor_x='left', anchor_y='bottom', bold=const.FONT_BOLD, batch=self.topToolbarBatch)
+
+        # right color label
+        self.colorright_label = pyglet.text.Label("Right:",
+                font_name=const.FONT_NAME,
+                font_size=9,
+                x=x+35, y=y+48,
+                anchor_x='left', anchor_y='bottom', bold=const.FONT_BOLD, batch=self.topToolbarBatch)
+
+        self.palette = []
+        self.paletteColors = []
+
+        for index in range(0, 33):
+            # first row
+            if index < cut:
+                xx = x + 92 + index*16 + index*4
+                yy = y + 52
+            else:
+                # second row
+                if index < 2*cut:
+                    xx = x + 92 + (index-cut)*16 + (index-cut)*4
+                    yy = y + 32
+                # third row
+                else:
+                    xx = x + 92 + (index-2*cut)*16 + (index-2*cut)*4
+                    yy = y + 12
+
+            self.paletteColors.append(PaletteButton(xx, yy, self.artist.palette[index], self.topToolbarBatch))
+
+
+    def init_toolbar_backgrounds(self):
+        bgCol = const.WINDOW_TOOLBAR_COLOR
+
+        # top
+        self.topToolbarBgImage = pyglet.image.SolidColorImagePattern((bgCol[0], bgCol[1], bgCol[2], bgCol[3])).create_image(
+            self.width, const.WINDOW_TOP_TOOLBAR_HEIGHT)
+        self.topToolbarBgSprite = pyglet.sprite.Sprite(self.topToolbarBgImage, x=0, y=0)
+
+        # bottom
+        self.bottomToolbarBgImage = pyglet.image.SolidColorImagePattern((bgCol[0], bgCol[1], bgCol[2], bgCol[3])).create_image(
+            self.width, const.WINDOW_BOTTOM_TOOLBAR_HEIGHT)
+        self.bottomToolbarBgSprite = pyglet.sprite.Sprite(self.bottomToolbarBgImage, x=0, y=0)
+
+    def on_draw(self):
+        self.draw_main_area()
+
+        if not self.pixelCursorSprite == None:
+            self.pixelCursorSprite.draw()
+
+        if self.canvas.gridOn and self.zoomLevel < 0.5:
+            self.draw_grid()
+
+        self.draw_bottom_toolbar_background()
+        self.zoomLabel.draw()
+        self.sizeLabel.draw()
+        if self.canvas.is_mouse_on_canvas(self.mousePos[0], self.mousePos[1]):
+            self.positionLabel.draw()
+
+        self.draw_top_toolbar_background()
+        self.draw_top_toolbar_icons()
+        self.paletteLeftColorSprite.draw()
+        self.paletteRightColorSprite.draw()
+        self.buttonShadowSprite.draw()
+        self.paletteShadowSprite.draw()
+        
+
+    def on_key_press(self, symbol, modifiers):
+        if symbol == pyglet.window.key._0:   # debug export
+            exp.export_image(self.canvas.pixelMatrix, const.CANVAS_SIZE_X, const.CANVAS_SIZE_Y)
+
+    def on_mouse_drag(self, x, y, dx, dy, button, modifiers):
+        self.set_mouse_coordinates(x, y)
+        self.update_pixel_cursor_position()
+        self.canvas.endPos[0], self.canvas.endPos[1] = self.convert_mouse_to_canvas_coordinates(x, y)
+
+        if abs(self.canvas.endPos[0] - self.canvas.beginningPos[0]) > 0 \
+        or abs(self.canvas.endPos[1] - self.canvas.beginningPos[1]) > 0:
+            if self.artist.mode == "pencil":
+                if button == pyglet.window.mouse.LEFT:
+                    self.canvas.draw_line(self.artist.primaryColor, self.previewBatch)
+                elif button == pyglet.window.mouse.RIGHT:
+                    self.canvas.draw_line(self.artist.secondaryColor, self.previewBatch)
+                self.canvas.beginningPos[0], self.canvas.beginningPos[1] = self.canvas.endPos[0], self.canvas.endPos[1]
+            elif self.artist.mode == "eraser":
+                if button == pyglet.window.mouse.LEFT:
+                    self.canvas.erase_line()
+                self.canvas.beginningPos[0], self.canvas.beginningPos[1] = self.canvas.endPos[0], self.canvas.endPos[1]
+            elif self.artist.mode == "line":
+                self.clear_preview()
+                if button == pyglet.window.mouse.LEFT:
+                    self.canvas.draw_line(self.artist.primaryColor, self.previewBatch)
+                elif button == pyglet.window.mouse.RIGHT:
+                    self.canvas.draw_line(self.artist.secondaryColor, self.previewBatch)
+            elif self.artist.mode == "rectangle":
+                self.clear_preview()
+                if button == pyglet.window.mouse.LEFT:
+                    self.canvas.draw_rectangle(self.artist.primaryColor, self.previewBatch)
+                elif button == pyglet.window.mouse.RIGHT:
+                    self.canvas.draw_rectangle(self.artist.secondaryColor, self.previewBatch)
+            elif self.artist.mode == "ellipse":
+                self.clear_preview()
+                if button == pyglet.window.mouse.LEFT:
+                    self.canvas.draw_ellipse(self.artist.primaryColor, self.previewBatch)
+                elif button == pyglet.window.mouse.RIGHT:
+                    self.canvas.draw_ellipse(self.artist.secondaryColor, self.previewBatch)
+
+    def on_mouse_press(self, x, y, button, modifiers):
+        self.set_mouse_coordinates(x, y)
+        if 48 < y < self.height - 80:   # inside main area
+            if self.canvas.is_mouse_on_canvas(self.mousePos[0], self.mousePos[1]):   # inside canvas
+                self.canvas.beginningPos[0], self.canvas.beginningPos[1] = self.canvas.mousePos[0], self.canvas.mousePos[1]
+                if self.artist.mode == "pencil":
+                    if button == pyglet.window.mouse.LEFT:
+                        self.canvas.draw_point(self.artist.primaryColor, self.previewBatch)
+                    elif button == pyglet.window.mouse.RIGHT:
+                        self.canvas.draw_point(self.artist.secondaryColor, self.previewBatch)
+                elif self.artist.mode == "eraser":
+                    if button == pyglet.window.mouse.LEFT:
+                        self.canvas.erase_point()
+                elif self.artist.mode == "line":
+                    if button == pyglet.window.mouse.LEFT:
+                        self.canvas.draw_point(self.artist.primaryColor, self.previewBatch)
+                    elif button == pyglet.window.mouse.RIGHT:
+                        self.canvas.draw_point(self.artist.secondaryColor, self.previewBatch)
+                elif self.artist.mode == "dropper":
+                    if button == pyglet.window.mouse.LEFT:
+                        self.canvas.color_pick(self.canvas.mousePos, self.artist, 0)
+                    elif button == pyglet.window.mouse.RIGHT:
+                        self.canvas.color_pick(self.canvas.mousePos, self.artist, 1)
+                    self.set_color_display()
+                elif self.artist.mode == "rectangle":
+                    if button == pyglet.window.mouse.LEFT:
+                        self.canvas.draw_point(self.artist.primaryColor, self.previewBatch)
+                    elif button == pyglet.window.mouse.RIGHT:
+                        self.canvas.draw_point(self.artist.secondaryColor, self.previewBatch)
+                elif self.artist.mode == "fill":
+                    if button == pyglet.window.mouse.LEFT:
+                        self.canvas.fill(self.artist.primaryColor, self.pixelBatch)
+                    elif button == pyglet.window.mouse.RIGHT:
+                        self.canvas.fill(self.artist.secondaryColor, self.pixelBatch)
+        else:
+            if y > self.height - 80:   # inside top toolbar
+                found = False
+                for box in self.paletteColors:
+                    if box.x < x < box.x + 16 and self.height - 80 + box.y < y < self.height - 80 + box.y + 16:
+                        if button == pyglet.window.mouse.LEFT:
+                            self.artist.primaryColor = box.color
+                        elif button == pyglet.window.mouse.RIGHT:
+                            self.artist.secondaryColor = box.color
+
+                        # draw shadow on clicked item
+                        self.paletteShadowSprite.x = box.x
+                        self.paletteShadowSprite.y = box.y
+
+                        self.set_color_display()
+                        found = True
+                        break
+                if found == False:
+                    for box in self.modeButtons:
+                        if box.x < x < box.x + 24 and self.height - 80 + box.y < y < self.height - 80 + box.y + 24:
+                            self.artist.mode = box.mode
+
+                            # draw shadow on clicked item
+                            self.buttonShadowSprite.x=box.x
+                            self.buttonShadowSprite.y=box.y
+
+                            found = True
+                            break
+
+    def on_mouse_motion(self, x, y, dx, dy):
+        self.set_mouse_coordinates(x, y)
+        self.update_pixel_cursor_position()
+        if self.canvas.is_mouse_on_canvas(self.mousePos[0], self.mousePos[1]):
+            self.update_coordinates_label()
+
+    def on_mouse_release(self, x, y, button, modifiers):
+        # apply preview layer to image layer
+        self.apply_preview()
+
+        # remove shadow from palette item
+        self.paletteShadowSprite.x = 0
+        self.paletteShadowSprite.y = 100
+
+    def on_mouse_scroll(self, x, y, dx, dy):
+        self.zoom(x, y, dy)
+        self.update_zoom_percentage_label()
+
+    def on_resize(self, width, height):
+        self.resize_content(width, height)
+    
+    def resize_content(self, width, height):
+        fx = width/self.lastWidth
+        fy = height/self.lastHeight
+
+        mouseX = 0.5
+        mouseY = 0.5
+
+        mouseXInWorld = self.left   + mouseX*self.zoomedWidth
+        mouseYInWorld = self.bottom + mouseY*self.zoomedHeight
+
+        self.zoomedWidth  *= fx
+        self.zoomedHeight *= fy
+
+        self.left   = mouseXInWorld - mouseX*self.zoomedWidth
+        self.right  = mouseXInWorld + (1 - mouseX)*self.zoomedWidth
+        self.bottom = mouseYInWorld - mouseY*self.zoomedHeight
+        self.top    = mouseYInWorld + (1 - mouseY)*self.zoomedHeight
+
+        # store last window values
+        self.lastWidth = width
+        self.lastHeight = height
+
+        # resize toolbars to match new window size
+        self.init_toolbar_backgrounds()
+
+    def run(self):
+        # start the window
+        pyglet.app.run()
+
+    def set_app_icon(self):
+        self.icon = pyglet.image.load(const.APP_ICON_PATH)
+        self.set_icon(self.icon)
+
+    def set_color_display(self):
+        # left color display
+        self.paletteLeftColorImage = pyglet.image.SolidColorImagePattern(self.artist.primaryColor).create_image(24, 24)
+        self.paletteLeftColorSprite = pyglet.sprite.Sprite(self.paletteLeftColorImage, x = 180, y = 22)
+
+        # right color display
+        self.paletteRightColorImage = pyglet.image.SolidColorImagePattern(self.artist.secondaryColor).create_image(24, 24)
+        self.paletteRightColorSprite = pyglet.sprite.Sprite(self.paletteRightColorImage, x = 180 + 38, y = 22)
+
+    def set_mouse_coordinates(self, x, y):
+        # position of the mouse relative to window (0.0-1.0)
+        mouseX = x/self.width
+        mouseY = y/self.height
+
+        # mouse position in world coordinates
+        self.mousePos[0] = self.left   + mouseX*self.zoomedWidth
+        self.mousePos[1] = self.bottom + mouseY*self.zoomedHeight
+
+        # mouse position on canvas
+        self.canvas.mousePos[0] = math.floor(self.mousePos[0] - const.WINDOW_START_WIDTH/2 + self.canvas.width/2)
+        self.canvas.mousePos[1] = math.floor(self.mousePos[1] - const.WINDOW_START_HEIGHT/2 + self.canvas.height/2)
+
+    def set_window_background_color(self):
+        bg = const.WINDOW_BACKGROUND_COLOR
+        gl.glClearColor(bg[0], bg[1], bg[2], bg[3])
+
+    def update_coordinates_label(self):
+        # set mouse coordinates label
+        self.positionLabel = pyglet.text.Label(f"({self.canvas.mousePos[0]}, {self.canvas.mousePos[1]})",
+                font_name=const.FONT_NAME,
+                font_size=const.FONT_SIZE,
+                x=self.width/2, y=0,
+                anchor_x='center', anchor_y='bottom', bold=const.FONT_BOLD)
+
+    def update_canvas_size_label(self):
+        self.sizeLabel = pyglet.text.Label(f"{self.canvas.width} x {self.canvas.height} px",
+                font_name=const.FONT_NAME,
+                font_size=const.FONT_SIZE,
+                x=self.width-4, y=0,
+                anchor_x='right', anchor_y='bottom', bold=const.FONT_BOLD)
+
+    def update_pixel_cursor_position(self):
+        if self.canvas.is_mouse_on_canvas(self.mousePos[0], self.mousePos[1]):
+            self.pixelCursorSprite = pyglet.sprite.Sprite(self.pixelCursorImage, x=self.canvas.origin[0]+self.canvas.mousePos[0],
+                                                        y=self.canvas.origin[1]+self.canvas.mousePos[1])
+        else:
+            self.pixelCursorSprite = None
+
+    def update_zoom_percentage_label(self):
+        self.zoomLabel = pyglet.text.Label(f"{int(1/self.zoomLevel*100)}%",
+            font_name=const.FONT_NAME,
+            font_size=const.FONT_SIZE,
+            x=4, y=0,
+            anchor_x='left', anchor_y='bottom', bold=const.FONT_BOLD)
+
+    def zoom(self, x, y, dy):
+        # get scale factor based on which direction the scroll was
+        factor = 1
+        if dy < 0:
+            factor = const.ZOOM_IN_FACTOR
+        elif dy > 0:
+            factor = const.ZOOM_OUT_FACTOR
+
+        # if mouse is in main area
+        if not y > self.height - 80 and not y < 20:
+            # if zoomLevel is in the proper range
+            if const.ZOOM_LIMIT_LOW <= self.zoomLevel * factor <= const.ZOOM_LIMIT_HIGH:
+                # position of the mouse relative to window
+                mouseX = x/self.width
+                mouseY = y/self.height
+
+                # mouse position in world coordinates
+                mouseXInWorld = self.left   + mouseX*self.zoomedWidth
+                mouseYInWorld = self.bottom + mouseY*self.zoomedHeight
+
+                # ??? TODO: clean-up
+                if dy > 0:
+                    if  not (const.WINDOW_START_WIDTH/2 - self.canvas.width/2 < mouseXInWorld < const.WINDOW_START_WIDTH/2 \
+                    + self.canvas.width/2 and const.WINDOW_START_HEIGHT/2 - self.canvas.height/2 < mouseYInWorld \
+                    < const.WINDOW_START_HEIGHT/2 + self.canvas.height/2):
+                        mouseXInWorld = const.WINDOW_START_WIDTH/2
+                        mouseYInWorld = const.WINDOW_START_HEIGHT/2
+                        mouseX = (mouseXInWorld - self.left)/self.zoomedWidth
+                        mouseY = (mouseYInWorld - self.bottom)/self.zoomedHeight
+                elif dy < 0:
+                    if  not (const.WINDOW_START_WIDTH/2 - self.canvas.width/2 < mouseXInWorld < const.WINDOW_START_WIDTH/2 \
+                    + self.canvas.width/2 and const.WINDOW_START_HEIGHT/2 - self.canvas.height/2 < mouseYInWorld \
+                    < const.WINDOW_START_HEIGHT/2 + self.canvas.height/2):
+                        mouseXInWorld = const.WINDOW_START_WIDTH/2
+                        mouseYInWorld = const.WINDOW_START_HEIGHT/2
+                        mouseX = (mouseXInWorld - self.left)/self.zoomedWidth
+                        mouseY = (mouseYInWorld - self.bottom)/self.zoomedHeight
+
+                # set zoom
+                self.zoomLevel *= factor
+                self.zoomedWidth  *= factor
+                self.zoomedHeight *= factor
+
+                self.left   = mouseXInWorld - mouseX*self.zoomedWidth
+                self.right  = mouseXInWorld + (1 - mouseX)*self.zoomedWidth
+                self.bottom = mouseYInWorld - mouseY*self.zoomedHeight
+                self.top    = mouseYInWorld + (1 - mouseY)*self.zoomedHeight
 
 if __name__ == "__main__":
-    setup()
-    holder_patch = pyglet.graphics.Batch()
-    pixel_batch = pyglet.graphics.Batch()
-    top_toolbar_batch = pyglet.graphics.Batch()
-
-    Window(START_W, START_H, resizable=True, caption="pix31").run()
+    appArtist = Artist()
+    appCanvas = Canvas(
+        const.CANVAS_SIZE_X, const.CANVAS_SIZE_Y)
+    appWindow = Window(
+        const.WINDOW_START_WIDTH, const.WINDOW_START_HEIGHT, appCanvas, appArtist, resizable=True, caption=const.APP_NAME).run()
