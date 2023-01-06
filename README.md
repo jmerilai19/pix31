@@ -4,4 +4,4 @@
 
 ![Alt text](readme_screenshot.png?raw=true "Screenshot")
 
-Made with Python
+Note: Some of the Pyglet OpenGL functions may be deprecated
