@@ -4,4 +4,4 @@
 
 ![Alt text](readme_screenshot.png?raw=true "Screenshot")
 
-Note: Some of the Pyglet OpenGL functions may be deprecated
+Note: Some of the functions may be deprecated in newer OpenGL versions
